@@ -404,16 +404,11 @@ def parse_network(text: str) -> tuple[int, int]:
 
 
 def cached_local_update_count() -> int | None:
-    key = "local"
     with _update_lock:
-        cached = _update_cache.get(key)
+        cached = _update_cache.get("local")
         if cached and time.time() - cached[0] < 600:
             return cached[1]
-    code, output = run_command(["/usr/bin/apt-get", "-s", "upgrade"], timeout=30)
-    value = sum(1 for line in output.splitlines() if line.startswith("Inst ")) if code == 0 else None
-    with _update_lock:
-        _update_cache[key] = (time.time(), value)
-    return value
+    return None
 
 
 def local_snapshot() -> dict[str, Any]:
@@ -613,9 +608,9 @@ def read_logs(node: dict[str, Any], unit: str, lines: int) -> str:
 
 def list_updates(node: dict[str, Any]) -> dict[str, Any]:
     if node["id"] == 0:
-        code, output = run_command(["/usr/bin/apt-get", "-s", "upgrade"], timeout=45)
+        code, output = run_command(["/usr/bin/apt-get", "-o", "Debug::NoLocking=1", "-s", "upgrade"], timeout=45)
     else:
-        code, output = ssh_run(node, "LC_ALL=C apt-get -s upgrade", timeout=45)
+        code, output = ssh_run(node, "LC_ALL=C apt-get -o Debug::NoLocking=1 -s upgrade", timeout=45)
     if code != 0:
         return {"supported": False, "packages": [], "message": output or "apt-get simulation failed."}
     packages: list[dict[str, str]] = []
@@ -624,6 +619,9 @@ def list_updates(node: dict[str, Any]) -> dict[str, Any]:
             continue
         fields = line.split()
         packages.append({"name": fields[1] if len(fields) > 1 else "unknown", "detail": line})
+    if node["id"] == 0:
+        with _update_lock:
+            _update_cache["local"] = (time.time(), len(packages))
     return {"supported": True, "packages": packages, "count": len(packages)}
 
 

@@ -8,6 +8,7 @@ After=network-online.target homelab-control-center-actions.socket
 Type=simple
 User=hcc
 Group=hcc
+Environment=PYTHONDONTWRITEBYTECODE=1
 WorkingDirectory=/var/lib/homelab-control-center
 ExecStart=/usr/bin/python3 /opt/homelab-control-center/current/src/server.py --config /etc/homelab-control-center/config.json
 Restart=on-failure

@@ -15,7 +15,7 @@ valid_unit() {
 
 [[ $EUID -eq 0 ]] || die "must run as root"
 
-action=$1
+action=${1:-}
 case $action in
   service)
     [[ $# -eq 3 ]] || die "service requires an operation and unit"
