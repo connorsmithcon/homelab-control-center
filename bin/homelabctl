@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+INSTALL_ROOT=/opt/homelab-control-center
+CURRENT=$INSTALL_ROOT/current
+PREVIOUS=$INSTALL_ROOT/previous
+CONFIG=/etc/homelab-control-center/config.json
+STATE=/var/lib/homelab-control-center
+WEB_SERVICE=homelab-control-center.service
+ACTION_SERVICE=homelab-control-center-actions.service
+ACTION_SOCKET=homelab-control-center-actions.socket
+
+usage() {
+  cat <<'USAGE'
+Usage: homelabctl COMMAND [OPTIONS]
+
+Commands:
+  status                    Show service status
+  logs                      Follow web and action-broker logs
+  doctor                    Run installation and health checks
+  update                    Install the newest verified main-branch release
+  rollback                  Swap the active and previous release
+  bootstrap-token [--rotate]
+                            Show or rotate the first-run token
+  node-key                  Print the SSH public key used for remote nodes
+  uninstall [--purge]       Remove the program; --purge also removes all state
+  version                   Print the installed version
+USAGE
+}
+
+die() {
+  echo "homelabctl: $*" >&2
+  exit 1
+}
+
+require_root() {
+  [[ $EUID -eq 0 ]] || die "this command must be run with sudo"
+}
+
+atomic_link() {
+  local target=$1
+  local link=$2
+  local temporary=$link.new.$$
+  ln -s "$target" "$temporary"
+  mv -Tf "$temporary" "$link"
+}
+
+command_status() {
+  systemctl --no-pager --full status "$WEB_SERVICE" "$ACTION_SOCKET" || true
+  if systemctl is-active --quiet "$ACTION_SERVICE"; then
+    systemctl --no-pager --full status "$ACTION_SERVICE" || true
+  fi
+}
+
+command_logs() {
+  exec journalctl -f -u "$WEB_SERVICE" -u "$ACTION_SERVICE" -u "$ACTION_SOCKET"
+}
+
+doctor_check() {
+  local label=$1
+  shift
+  if "$@" >/dev/null 2>&1; then
+    printf '  [OK] %s\n' "$label"
+    return 0
+  fi
+  printf '  [FAIL] %s\n' "$label"
+  return 1
+}
+
+command_doctor() {
+  local failures=0
+  local port
+  echo "Homelab Control Center doctor"
+  echo
+
+  for required in python3 curl ssh ssh-keygen ssh-keyscan sha256sum systemctl journalctl apt-get runuser; do
+    doctor_check "command: $required" command -v "$required" || failures=$((failures + 1))
+  done
+
+  doctor_check "active release symlink" test -L "$CURRENT" || failures=$((failures + 1))
+  doctor_check "release VERSION file" test -r "$CURRENT/VERSION" || failures=$((failures + 1))
+  doctor_check "configuration readable by hcc" runuser -u hcc -- test -r "$CONFIG" || failures=$((failures + 1))
+  doctor_check "web Python syntax" python3 -m py_compile "$CURRENT/src/server.py" || failures=$((failures + 1))
+  doctor_check "broker Python syntax" python3 -m py_compile "$CURRENT/src/actiond.py" || failures=$((failures + 1))
+  doctor_check "configuration and database" runuser -u hcc -- python3 "$CURRENT/src/server.py" --config "$CONFIG" --check || failures=$((failures + 1))
+  doctor_check "web service active" systemctl is-active --quiet "$WEB_SERVICE" || failures=$((failures + 1))
+  doctor_check "action socket active" systemctl is-active --quiet "$ACTION_SOCKET" || failures=$((failures + 1))
+  doctor_check "action socket exists" test -S /run/homelab-control-center/actions.sock || failures=$((failures + 1))
+  doctor_check "SSH private key permissions" test "$(stat -c %a "$STATE/.ssh/id_ed25519" 2>/dev/null)" = 600 || failures=$((failures + 1))
+  doctor_check "SSH public key exists" test -r "$STATE/.ssh/id_ed25519.pub" || failures=$((failures + 1))
+
+  port=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$CONFIG" 2>/dev/null || true)
+  if [[ $port =~ ^[0-9]+$ ]]; then
+    doctor_check "HTTP health endpoint" curl -fsS --max-time 5 "http://127.0.0.1:$port/api/health" || failures=$((failures + 1))
+  else
+    printf '  [FAIL] HTTP health endpoint: configuration port is invalid\n'
+    failures=$((failures + 1))
+  fi
+
+  echo
+  if (( failures == 0 )); then
+    echo "All checks passed."
+    return 0
+  fi
+  echo "$failures check(s) failed."
+  return 1
+}
+
+command_update() {
+  require_root
+  [[ -x "$CURRENT/install.sh" ]] || die "verified installed updater is missing"
+  exec "$CURRENT/install.sh" --update
+}
+
+command_rollback() {
+  require_root
+  [[ -L "$CURRENT" ]] || die "active release is missing"
+  [[ -L "$PREVIOUS" ]] || die "no previous release is available"
+
+  local active rollback
+  active=$(readlink -f "$CURRENT")
+  rollback=$(readlink -f "$PREVIOUS")
+  [[ -d "$active" && -d "$rollback" ]] || die "a release target is missing"
+  [[ "$active" == "$INSTALL_ROOT/releases/"* ]] || die "active release target is unsafe"
+  [[ "$rollback" == "$INSTALL_ROOT/releases/"* ]] || die "rollback release target is unsafe"
+
+  atomic_link "$rollback" "$CURRENT"
+  atomic_link "$active" "$PREVIOUS"
+  systemctl daemon-reload
+  systemctl restart "$ACTION_SOCKET"
+  systemctl try-restart "$ACTION_SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$WEB_SERVICE"
+  echo "Rolled back to $(cat "$CURRENT/VERSION") at $(basename "$(readlink -f "$CURRENT")")."
+}
+
+admin_exists() {
+  python3 - "$CONFIG" <<'PY'
+import json
+import sqlite3
+import sys
+
+try:
+    config = json.load(open(sys.argv[1], encoding="utf-8"))
+    connection = sqlite3.connect(config["database"])
+    row = connection.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+except (FileNotFoundError, sqlite3.Error, KeyError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0 if row else 1)
+PY
+}
+
+command_bootstrap_token() {
+  require_root
+  local rotate=false
+  if [[ ${1:-} == --rotate ]]; then
+    rotate=true
+  elif [[ $# -gt 0 ]]; then
+    die "usage: homelabctl bootstrap-token [--rotate]"
+  fi
+  admin_exists && die "an administrator already exists; setup-token recovery is disabled"
+  local token_file=$STATE/bootstrap-token
+  if [[ $rotate == true || ! -s "$token_file" ]]; then
+    umask 0027
+    python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$token_file"
+    chown root:hcc "$token_file"
+    chmod 0640 "$token_file"
+    echo "A new one-time setup token was created:"
+  else
+    echo "Current one-time setup token:"
+  fi
+  cat "$token_file"
+}
+
+command_node_key() {
+  require_root
+  local key=$STATE/.ssh/id_ed25519.pub
+  [[ -r "$key" ]] || die "SSH public key is missing; run homelabctl doctor"
+  cat "$key"
+}
+
+safe_remove_installation() {
+  [[ "$INSTALL_ROOT" == /opt/homelab-control-center ]] || die "unsafe installation path"
+  rm -rf -- "$INSTALL_ROOT"
+}
+
+safe_purge_state() {
+  [[ "$STATE" == /var/lib/homelab-control-center ]] || die "unsafe state path"
+  [[ "$(dirname "$CONFIG")" == /etc/homelab-control-center ]] || die "unsafe configuration path"
+  rm -rf -- "$STATE" /etc/homelab-control-center
+}
+
+command_uninstall() {
+  require_root
+  local purge=false
+  if [[ ${1:-} == --purge ]]; then
+    purge=true
+  elif [[ $# -gt 0 ]]; then
+    die "usage: homelabctl uninstall [--purge]"
+  fi
+
+  systemctl disable --now "$WEB_SERVICE" "$ACTION_SOCKET" >/dev/null 2>&1 || true
+  systemctl stop "$ACTION_SERVICE" >/dev/null 2>&1 || true
+  rm -f --     /etc/systemd/system/homelab-control-center.service     /etc/systemd/system/homelab-control-center-actions.service     /etc/systemd/system/homelab-control-center-actions.socket     /usr/local/bin/homelabctl
+  systemctl daemon-reload
+  systemctl reset-failed >/dev/null 2>&1 || true
+  safe_remove_installation
+
+  if [[ $purge == true ]]; then
+    safe_purge_state
+    userdel hcc >/dev/null 2>&1 || true
+    groupdel hcc >/dev/null 2>&1 || true
+    echo "Program, configuration, database, audit history, and SSH keys removed."
+  else
+    echo "Program removed. Configuration and state were preserved."
+    echo "Run a future installer to reuse them, or remove these paths manually:"
+    echo "  /etc/homelab-control-center"
+    echo "  /var/lib/homelab-control-center"
+  fi
+}
+
+command_version() {
+  [[ -r "$CURRENT/VERSION" ]] || die "VERSION file is missing"
+  cat "$CURRENT/VERSION"
+}
+
+command=${1:-}
+if [[ -z $command ]]; then
+  usage
+  exit 1
+fi
+shift
+
+case $command in
+  status) command_status "$@" ;;
+  logs) command_logs "$@" ;;
+  doctor) command_doctor "$@" ;;
+  update) command_update "$@" ;;
+  rollback) command_rollback "$@" ;;
+  bootstrap-token) command_bootstrap_token "$@" ;;
+  node-key) command_node_key "$@" ;;
+  uninstall) command_uninstall "$@" ;;
+  version) command_version "$@" ;;
+  help|-h|--help) usage ;;
+  *) usage; die "unknown command: $command" ;;
+esac

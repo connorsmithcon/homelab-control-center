@@ -1,0 +1,27 @@
+[Unit]
+Description=Homelab Control Center privileged action broker
+Documentation=https://github.com/connorsmithcon/homelab-control-center
+Requires=homelab-control-center-actions.socket
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/homelab-control-center/current/src/actiond.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+StandardOutput=journal
+StandardError=journal

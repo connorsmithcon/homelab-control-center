@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+die() {
+  echo "hcc-node-helper: $*" >&2
+  exit 2
+}
+
+valid_unit() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,126}\.service$ ]]
+}
+
+[[ $EUID -eq 0 ]] || die "must run as root"
+
+action=$1
+case $action in
+  service)
+    [[ $# -eq 3 ]] || die "service requires an operation and unit"
+    operation=$2
+    unit=$3
+    case $operation in
+      start|stop|restart) ;;
+      *) die "service operation is not allowed" ;;
+    esac
+    valid_unit "$unit" || die "service unit is invalid"
+    exec /usr/bin/systemctl "$operation" "$unit"
+    ;;
+  updates-refresh)
+    [[ $# -eq 1 ]] || die "updates-refresh accepts no arguments"
+    exec /usr/bin/apt-get update
+    ;;
+  updates-apply)
+    [[ $# -eq 1 ]] || die "updates-apply accepts no arguments"
+    export DEBIAN_FRONTEND=noninteractive
+    exec /usr/bin/apt-get -y upgrade
+    ;;
+  *)
+    die "action is not allowed"
+    ;;
+esac

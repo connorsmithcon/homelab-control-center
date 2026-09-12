@@ -1,0 +1,40 @@
+[Unit]
+Description=Homelab Control Center web service
+Documentation=https://github.com/connorsmithcon/homelab-control-center
+Wants=network-online.target homelab-control-center-actions.socket
+After=network-online.target homelab-control-center-actions.socket
+
+[Service]
+Type=simple
+User=hcc
+Group=hcc
+WorkingDirectory=/var/lib/homelab-control-center
+ExecStart=/usr/bin/python3 /opt/homelab-control-center/current/src/server.py --config /etc/homelab-control-center/config.json
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+ReadWritePaths=/var/lib/homelab-control-center
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

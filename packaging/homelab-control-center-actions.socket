@@ -1,0 +1,14 @@
+[Unit]
+Description=Homelab Control Center privileged action socket
+PartOf=homelab-control-center.service
+
+[Socket]
+ListenStream=/run/homelab-control-center/actions.sock
+SocketUser=root
+SocketGroup=hcc
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

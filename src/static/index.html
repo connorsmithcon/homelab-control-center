@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090d16">
+  <title>Homelab Control Center</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <noscript>
+    <div class="noscript">JavaScript is required for the control-center interface.</div>
+  </noscript>
+
+  <section id="auth-shell" class="auth-shell">
+    <div class="auth-card panel">
+      <div class="brand-mark" aria-hidden="true">HC</div>
+      <p class="eyebrow">Private infrastructure</p>
+      <h1>Homelab Control Center</h1>
+      <p id="auth-copy" class="muted">Checking the service…</p>
+
+      <form id="setup-form" class="stack" hidden>
+        <label>
+          Administrator username
+          <input name="username" autocomplete="username" minlength="3" maxlength="32" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required>
+        </label>
+        <label>
+          One-time setup token
+          <input name="bootstrap_token" type="password" autocomplete="off" required>
+        </label>
+        <button class="button primary" type="submit">Create administrator</button>
+      </form>
+
+      <form id="login-form" class="stack" hidden>
+        <label>
+          Username
+          <input name="username" autocomplete="username" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="button primary" type="submit">Sign in</button>
+      </form>
+
+      <p id="auth-error" class="form-error" role="alert"></p>
+    </div>
+  </section>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small" aria-hidden="true">HC</div>
+        <div>
+          <strong>Control Center</strong>
+          <span id="sidebar-version">Loading</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Control center">
+        <button class="nav-button active" data-view="overview"><span>◫</span>Overview</button>
+        <button class="nav-button" data-view="nodes"><span>◇</span>Nodes</button>
+        <button class="nav-button" data-view="services"><span>◉</span>Services</button>
+        <button class="nav-button" data-view="logs"><span>≡</span>Logs</button>
+        <button class="nav-button" data-view="updates"><span>↻</span>Updates</button>
+        <button class="nav-button" data-view="audit"><span>✓</span>Audit</button>
+        <button class="nav-button" data-view="settings"><span>⚙</span>Settings</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="status-dot"></span>
+        <span>Local control plane</span>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Homelab</p>
+          <h2 id="page-title">Overview</h2>
+        </div>
+        <div class="topbar-actions">
+          <span id="last-updated" class="muted compact"></span>
+          <button id="refresh-view" class="button ghost" type="button">Refresh</button>
+          <span id="current-user" class="user-chip"></span>
+          <button id="logout-button" class="button ghost" type="button">Sign out</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="view-overview" class="view active-view">
+          <div id="fleet-summary" class="summary-grid"></div>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Live status</p>
+              <h3>Infrastructure</h3>
+            </div>
+            <span class="muted">Refreshes every 15 seconds</span>
+          </div>
+          <div id="node-cards" class="node-grid">
+            <div class="panel loading-card">Loading host health…</div>
+          </div>
+        </section>
+
+        <section id="view-nodes" class="view" hidden>
+          <div class="two-column">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Inventory</p>
+                  <h3>Monitored nodes</h3>
+                </div>
+              </div>
+              <div id="node-list" class="node-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Agentless SSH</p>
+                  <h3>Add a Linux node</h3>
+                </div>
+              </div>
+              <form id="node-form" class="stack">
+                <label>
+                  Display name
+                  <input name="name" placeholder="pve01" required>
+                </label>
+                <div class="form-grid">
+                  <label>
+                    Host or IP
+                    <input name="host" placeholder="10.0.2.10" required>
+                  </label>
+                  <label>
+                    SSH port
+                    <input name="port" type="number" value="22" min="1" max="65535" required>
+                  </label>
+                </div>
+                <label>
+                  SSH username
+                  <input name="username" placeholder="hccmon" required>
+                </label>
+                <button id="probe-node" class="button secondary" type="button">Probe host key</button>
+                <div id="fingerprint-box" class="fingerprint-box" hidden>
+                  <strong>Verify these SHA-256 fingerprints</strong>
+                  <pre id="fingerprints"></pre>
+                  <p class="muted compact">Compare them with the node console before trusting the host.</p>
+                  <button id="add-node" class="button primary" type="submit">Trust key and add node</button>
+                </div>
+              </form>
+            </article>
+          </div>
+        </section>
+
+        <section id="view-services" class="view" hidden>
+          <div class="toolbar panel">
+            <label>
+              Node
+              <select id="services-node"></select>
+            </label>
+            <label class="grow">
+              Filter
+              <input id="service-filter" type="search" placeholder="Search unit or description">
+            </label>
+            <button id="load-services" class="button secondary" type="button">Load services</button>
+          </div>
+          <div class="panel table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Unit</th><th>State</th><th>Description</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="services-body"></tbody>
+              </table>
+            </div>
+          </div>
+          <pre id="service-output" class="output-panel" hidden></pre>
+        </section>
+
+        <section id="view-logs" class="view" hidden>
+          <div class="toolbar panel">
+            <label>
+              Node
+              <select id="logs-node"></select>
+            </label>
+            <label class="grow">
+              Service unit
+              <input id="logs-unit" placeholder="ssh.service">
+            </label>
+            <label>
+              Lines
+              <input id="logs-lines" type="number" value="200" min="1" max="500">
+            </label>
+            <button id="load-logs" class="button secondary" type="button">Load journal</button>
+          </div>
+          <pre id="log-output" class="log-output">Choose a node and service unit.</pre>
+        </section>
+
+        <section id="view-updates" class="view" hidden>
+          <div class="toolbar panel">
+            <label>
+              Node
+              <select id="updates-node"></select>
+            </label>
+            <button id="scan-updates" class="button secondary" type="button">Scan updates</button>
+            <button id="refresh-updates" class="button ghost" type="button">Refresh package index</button>
+          </div>
+          <div class="two-column updates-layout">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Package status</p>
+                  <h3 id="update-count">Not scanned</h3>
+                </div>
+              </div>
+              <div id="update-list" class="package-list"></div>
+            </article>
+            <article class="panel danger-panel">
+              <p class="eyebrow">Protected action</p>
+              <h3>Install available updates</h3>
+              <p class="muted">This runs the distribution package upgrade and may restart services.</p>
+              <label>
+                Type APPLY to confirm
+                <input id="apply-confirm" autocomplete="off" placeholder="APPLY">
+              </label>
+              <button id="apply-updates" class="button danger" type="button">Apply updates</button>
+            </article>
+          </div>
+          <pre id="update-output" class="output-panel" hidden></pre>
+        </section>
+
+        <section id="view-audit" class="view" hidden>
+          <div class="panel table-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Security events</p>
+                <h3>Recent audit history</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Time</th><th>User</th><th>Action</th><th>Target</th><th>Outcome</th><th>Source</th></tr>
+                </thead>
+                <tbody id="audit-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-settings" class="view" hidden>
+          <div class="two-column">
+            <article class="panel">
+              <p class="eyebrow">Runtime</p>
+              <h3>Control-center settings</h3>
+              <dl id="runtime-settings" class="definition-list"></dl>
+              <h4>SSH public key</h4>
+              <p class="muted compact">Add this public key to each dedicated remote monitoring account.</p>
+              <pre id="ssh-public-key" class="key-output"></pre>
+              <button id="copy-key" class="button secondary" type="button">Copy public key</button>
+            </article>
+
+            <article class="panel">
+              <p class="eyebrow">Account</p>
+              <h3>Change password</h3>
+              <form id="password-form" class="stack">
+                <label>
+                  Current password
+                  <input name="current_password" type="password" autocomplete="current-password" required>
+                </label>
+                <label>
+                  New password
+                  <input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required>
+                </label>
+                <button class="button primary" type="submit">Change password</button>
+              </form>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+</body>
+</html>
